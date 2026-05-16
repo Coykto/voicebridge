@@ -2,8 +2,16 @@ import Foundation
 
 /// JSON-line events written to stderr per tech spec §2.4.
 ///
-/// Discriminator is the `event` field. Stdout is reserved for raw PCM frames
-/// (future slices), so all protocol traffic lives on stderr.
+/// Discriminator is the `event` field. Stdout is reserved for raw PCM frames,
+/// so all protocol traffic lives on stderr.
+///
+/// `error.code` is an open-ended closed-set token. Known values today:
+///   - `"accessibility_denied"` / `"conflict"` / `"param_err"` /
+///     `"unknown_key:<key>"` / `"unknown_osstatus_<code>"` — hotkey registration
+///     failures (spec 001).
+///   - `"microphone_denied"` — mic permission denied at startup (spec 004 §2.4).
+///   - `"mic_lost"` — unrecoverable mic-device loss mid-session (spec 004 §2.4).
+///   - `"encode_failed"` — defensive fallback when JSON encoding itself fails.
 enum Event: Equatable {
     case ready
     case hotkeyRegistered(chord: String)
