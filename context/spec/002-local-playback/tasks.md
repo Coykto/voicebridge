@@ -10,11 +10,11 @@ Subagents available: `python-backend` (Python orchestrator / asyncio / audio).
 
 **Goal:** prove the module + `sounddevice` path works end-to-end. Module skeleton, the `RawOutputStream` + callback contract, and the queue plumbing all exist and produce audible audio.
 
-- [ ] Add `sounddevice` as a `voicebridge` runtime dependency in `pyproject.toml`; run `uv sync` to pin it. **[Agent: python-backend]**
-- [ ] Create `src/voicebridge/playback.py` with `class Playback` exposing `open(sample_rate: int)`, `write(pcm_bytes: bytes)`, `close()`, and a read-only `underrun_count` (returns `0` for now). Internals per tech spec §2.2–§2.4: `sounddevice.RawOutputStream` with `channels=1`, `dtype='int16'`, `device=None`, `latency='low'`, `blocksize=0`, callback function bound to a `queue.SimpleQueue[bytes]` and a "carry" `bytearray` for partially-consumed chunks. **[Agent: python-backend]**
-- [ ] Create `scripts/play_test_tone.py`: builds 1.5 s of 440 Hz mono int16 PCM at 24 kHz, instantiates `Playback`, `open(24000)`, splits the tone into ~20 ms chunks, calls `playback.write(chunk)` in a tight `time.sleep(0.02)` loop, then `close()` after a short tail wait. **[Agent: python-backend]**
-- [ ] Add `tests/test_playback_callback.py`: feed a sequence of known PCM byte chunks into `Playback.write`, invoke the callback directly with various `frames` sizes (smaller than a chunk, larger than a chunk, spanning chunk boundaries), assert the output bytes match the concatenation of inputs in order. **[Agent: python-backend]**
-- [ ] **Verify automated:** `uv run pytest tests/test_playback_callback.py` — passes. **[Agent: python-backend]**
+- [x] Add `sounddevice` as a `voicebridge` runtime dependency in `pyproject.toml`; run `uv sync` to pin it. **[Agent: python-backend]**
+- [x] Create `src/voicebridge/playback.py` with `class Playback` exposing `open(sample_rate: int)`, `write(pcm_bytes: bytes)`, `close()`, and a read-only `underrun_count` (returns `0` for now). Internals per tech spec §2.2–§2.4: `sounddevice.RawOutputStream` with `channels=1`, `dtype='int16'`, `device=None`, `latency='low'`, `blocksize=0`, callback function bound to a `queue.SimpleQueue[bytes]` and a "carry" `bytearray` for partially-consumed chunks. **[Agent: python-backend]**
+- [x] Create `scripts/play_test_tone.py`: builds 1.5 s of 440 Hz mono int16 PCM at 24 kHz, instantiates `Playback`, `open(24000)`, splits the tone into ~20 ms chunks, calls `playback.write(chunk)` in a tight `time.sleep(0.02)` loop, then `close()` after a short tail wait. **[Agent: python-backend]**
+- [x] Add `tests/test_playback_callback.py`: feed a sequence of known PCM byte chunks into `Playback.write`, invoke the callback directly with various `frames` sizes (smaller than a chunk, larger than a chunk, spanning chunk boundaries), assert the output bytes match the concatenation of inputs in order. **[Agent: python-backend]**
+- [x] **Verify automated:** `uv run pytest tests/test_playback_callback.py` — passes. **[Agent: python-backend]**
 - [ ] **Verify manual:** `uv run python scripts/play_test_tone.py` — a clear 440 Hz tone is audible through the current default output device. Change the system default output (e.g., plug in headphones), re-run, confirm audio follows the new default. During playback, hit the macOS volume keys → loudness changes in real time. **[Agent: python-backend — requires user to listen and toggle device/volume]**
 
 ---
@@ -23,12 +23,12 @@ Subagents available: `python-backend` (Python orchestrator / asyncio / audio).
 
 **Goal:** functional spec §2.6 "if something goes wrong on the playback path, the author sees evidence." Tech spec §2.4 (underruns) and §3 risk table (overflow cap at ~5 s of audio).
 
-- [ ] In `playback.py`, add the underrun counter logic per tech spec §2.4: when the callback cannot fill `frames * 2` bytes from queue + carry, pad with zeros and increment `underrun_count` by 1 per callback invocation. **[Agent: python-backend]**
-- [ ] Add a bounded queue policy: cap accumulated queued bytes at 5 seconds of audio at the open sample rate (e.g. `5 * sample_rate * 2` bytes at int16 mono). If `write` would exceed the cap, drop the **oldest** chunk(s) from the queue first and increment a new `overflow_count`. Expose `overflow_count` as a read-only property. **[Agent: python-backend]**
-- [ ] `Playback.close()`: drain the queue with up to ~200 ms timeout, stop and close the stream, then log a single line to stderr: `playback: <underrun_count> underruns, <overflow_count> overflows in session`. **[Agent: python-backend]**
-- [ ] Add to `tests/test_playback_callback.py`: invoke the callback with an empty queue → assert `outdata` is all zeros and `underrun_count` increments by 1 per call. Push more bytes than the 5 s cap → assert oldest chunks dropped and `overflow_count` increments by the number of dropped chunks. **[Agent: python-backend]**
-- [ ] Create `scripts/playback_starve_smoke.py`: feeds 0.5 s of tone, sleeps 0.3 s (no writes), feeds another 0.5 s, then closes. Prints the final log line. **[Agent: python-backend]**
-- [ ] **Verify automated:** `uv run pytest tests/test_playback_callback.py` — passes (including new cases). **[Agent: python-backend]**
+- [x] In `playback.py`, add the underrun counter logic per tech spec §2.4: when the callback cannot fill `frames * 2` bytes from queue + carry, pad with zeros and increment `underrun_count` by 1 per callback invocation. **[Agent: python-backend]**
+- [x] Add a bounded queue policy: cap accumulated queued bytes at 5 seconds of audio at the open sample rate (e.g. `5 * sample_rate * 2` bytes at int16 mono). If `write` would exceed the cap, drop the **oldest** chunk(s) from the queue first and increment a new `overflow_count`. Expose `overflow_count` as a read-only property. **[Agent: python-backend]**
+- [x] `Playback.close()`: drain the queue with up to ~200 ms timeout, stop and close the stream, then log a single line to stderr: `playback: <underrun_count> underruns, <overflow_count> overflows in session`. **[Agent: python-backend]**
+- [x] Add to `tests/test_playback_callback.py`: invoke the callback with an empty queue → assert `outdata` is all zeros and `underrun_count` increments by 1 per call. Push more bytes than the 5 s cap → assert oldest chunks dropped and `overflow_count` increments by the number of dropped chunks. **[Agent: python-backend]**
+- [x] Create `scripts/playback_starve_smoke.py`: feeds 0.5 s of tone, sleeps 0.3 s (no writes), feeds another 0.5 s, then closes. Prints the final log line. **[Agent: python-backend]**
+- [x] **Verify automated:** `uv run pytest tests/test_playback_callback.py` — passes (including new cases). **[Agent: python-backend]**
 - [ ] **Verify manual:** `uv run python scripts/playback_starve_smoke.py` — hear tone, brief silence (underruns accumulating), tone again. Final log line shows a non-zero `underruns` count and `overflows=0`. Repeat with a flooding variant (write 6 s of tone instantly) — final log line shows `overflows>0`. **[Agent: python-backend — requires user to listen and read the final log line]**
 
 ---

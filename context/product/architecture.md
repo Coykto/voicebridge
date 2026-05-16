@@ -15,19 +15,19 @@ _Scope: Phase 1 of the roadmap — the four-piece proof of concept. Phase 2 comp
 
 ## 2. Audio I/O
 
-- **Microphone capture (Swift):** `AVAudioEngine` input tap on the default input device, reusing the pattern from `record/swift-capture/Sources/RecordCapture/AudioCapture.swift`. Captured buffers are converted in Swift to **16 kHz mono PCM16** and streamed over stdout to Python. Capture runs continuously while the process is alive; gating to "only while hotkey is held" is done on the orchestrator side (Python drops frames received while the PTT flag is false), so we don't fight `AVAudioEngine`'s start/stop semantics inside fast key chords.
+- **Microphone capture (Swift):** `AVAudioEngine` input tap on the default input device, reusing the pattern from `record/swift-capture/Sources/RecordCapture/AudioCapture.swift`. Captured buffers are converted in Swift to **24 kHz mono PCM16** and streamed over stdout to Python. Capture runs continuously while the process is alive; gating to "only while hotkey is held" is done on the orchestrator side (Python drops frames received while the PTT flag is false), so we don't fight `AVAudioEngine`'s start/stop semantics inside fast key chords.
 - **Playback (Python):** Python uses the `sounddevice` library (PortAudio binding) to write PCM frames returned by the realtime model directly to the **default output device** (system speakers / headphones). Swift is not involved in playback for the PoC. This sidesteps the `ARCHITECTURE.md` note about `AVAudioEngine` not cleanly targeting non-default output devices, which only becomes a problem in Phase 2 when we need to target BlackHole.
 - **Sample rate strategy:** Two fixed rates, no negotiation.
-  - **Mic → model:** Swift resamples to 16 kHz mono PCM16 before sending to Python.
+  - **Mic → model:** Swift resamples to **24 kHz mono PCM16** before sending to Python.
   - **Model → speakers:** OpenAI Realtime returns 24 kHz PCM16; `sounddevice` plays at 24 kHz and the OS handles any device-level resampling.
 
 ---
 
 ## 3. External Services & APIs
 
-- **Realtime translation model:** **OpenAI Realtime API** over WebSocket. The orchestrator opens one session per PoC run, configured with a translation system prompt. Streams 16 kHz PCM16 mic frames in, receives 24 kHz PCM16 audio frames out as they arrive. Voice and model are fixed in code for the PoC.
+- **Realtime translation model:** **OpenAI Realtime API** over WebSocket. The orchestrator opens one session per PoC run, configured with a translation system prompt. Streams 24 kHz PCM16 mic frames in, receives 24 kHz PCM16 audio frames out as they arrive. Languages are configured via `.env` (`VOICEBRIDGE_TARGET_LANG=English` or `Spanish`). The source is fixed at Russian for the PoC and auto-detected by the model.
 - **API key:** Read from a local `.env` file via `python-dotenv`. The `.env` file is gitignored. Expected variable: `OPENAI_API_KEY`.
-- **Translation prompt:** A single hardcoded system-prompt template inside the Python orchestrator with `{source}` and `{target}` placeholders. Languages are supplied as CLI flags at startup (e.g. `--source ru --target en`) and substituted into the template before the session opens. The literal prompt text lives next to the orchestrator entrypoint for easy iteration.
+- **Translation prompt:** No system-prompt template. The translation endpoint takes a target-language ISO code via `audio.output.language` on the `session.update` event. The source language is auto-detected by the model.
 
 ---
 
