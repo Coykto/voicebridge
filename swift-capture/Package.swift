@@ -28,6 +28,11 @@ let package = Package(
                     "-Xlinker", "Info.plist",
                 ])
             ]
+        ),
+        .testTarget(
+            name: "VoiceBridgeCaptureTests",
+            dependencies: ["VoiceBridgeCapture"],
+            path: "Tests/VoiceBridgeCaptureTests"
         )
     ]
 )

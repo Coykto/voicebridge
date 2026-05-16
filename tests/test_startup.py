@@ -31,6 +31,12 @@ class _FakeProc:
         self.pid = 0
         self.terminated = False
         self.killed = False
+        # The PCM pump reads from proc.stdout. A reader with no data and no
+        # EOF keeps the pump suspended on its first `readexactly(640)` for
+        # the test's lifetime — matches how a healthy Swift binary behaves
+        # when no audio has flowed yet. Startup-failure tests don't even
+        # reach the pump, so this also covers those.
+        self.stdout: asyncio.StreamReader | None = asyncio.StreamReader()
 
     def terminate(self) -> None:
         self.terminated = True
@@ -109,6 +115,22 @@ async def test_accessibility_denied_exits_2(
     assert exit_code == 2
     err = capsys.readouterr().err
     assert "Accessibility" in err
+    assert "System Settings" in err
+
+
+async def test_microphone_denied_before_ready_exits_4(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `microphone_denied` arrives BEFORE `Ready` — the Swift binary aborts mic
+    # startup before announcing readiness. The handshake must still route it
+    # through errors.lookup() and exit cleanly.
+    _install_fake_spawn(monkeypatch, [Error(code="microphone_denied")])
+
+    exit_code = await vb_main.run(_args(), _config())
+
+    assert exit_code == 4
+    err = capsys.readouterr().err
+    assert "Microphone access is required" in err
     assert "System Settings" in err
 
 

@@ -1,10 +1,11 @@
 """Map Swift-side startup error codes to user-facing messages and exit codes.
 
 The closed set of codes emitted by the Swift capture binary lives in
-``HotkeyMonitor.swift``: ``accessibility_denied``, ``conflict``, ``param_err``,
-``unknown_key:<k>``, ``unknown_osstatus_<n>``. Anything outside that set is
-still handled with the generic catch-all so the orchestrator never silently
-hangs on an unrecognized token.
+``HotkeyMonitor.swift`` and ``AudioCapture.swift``: ``accessibility_denied``,
+``conflict``, ``param_err``, ``unknown_key:<k>``, ``unknown_osstatus_<n>``,
+``microphone_denied``, ``mic_lost``. Anything outside that set is still handled
+with the generic catch-all so the orchestrator never silently hangs on an
+unrecognized token.
 """
 
 from __future__ import annotations
@@ -23,15 +24,33 @@ _CONFLICT_MESSAGE = (
     "Quit it or unbind the shortcut, then re-run."
 )
 
+_MICROPHONE_DENIED_MESSAGE = (
+    "Microphone access is required. Grant it in System Settings → "
+    "Privacy & Security → Microphone, then re-launch."
+)
 
-def lookup(code: str) -> tuple[str, int]:
-    """Return ``(message, exit_code)`` for a Swift-side startup error token."""
+
+def lookup(code: str, *, message: str | None = None) -> tuple[str, int]:
+    """Return ``(message, exit_code)`` for a Swift-side error token.
+
+    ``message`` is the optional free-form text from the Swift ``error`` event;
+    used by ``mic_lost`` to substitute the underlying reason into the printed
+    message. Ignored for codes that don't carry a reason.
+    """
 
     match code:
         case "accessibility_denied":
             return _ACCESSIBILITY_MESSAGE, 2
         case "conflict":
             return _CONFLICT_MESSAGE, 1
+        case "microphone_denied":
+            return _MICROPHONE_DENIED_MESSAGE, 4
+        case "mic_lost":
+            reason = message or "device removed"
+            return (
+                f"Microphone disconnected ({reason}). Restart the tool to "
+                "use the current default input."
+            ), 5
         case _:
             return f"hotkey could not be registered: {code}", 1
 
@@ -100,6 +119,9 @@ def _message(exc: Exception) -> str:
     if isinstance(exc, ApiKeyRejected):
         return "error: OpenAI rejected the API key"
     if isinstance(exc, RealtimeServerError):
+        detail = str(exc).strip()
+        if detail:
+            return f"error: OpenAI realtime server returned an error: {detail}"
         return "error: OpenAI realtime server returned an error"
     if isinstance(exc, ConnectionLost):
         return "error: connection to OpenAI realtime endpoint was lost"

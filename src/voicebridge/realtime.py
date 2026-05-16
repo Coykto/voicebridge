@@ -114,11 +114,14 @@ class RealtimeSession:
         log_fp = _open_log()
         keep_log_open = False
         try:
+            # The realtime translations endpoint rejects top-level
+            # `input_audio_format` / `output_audio_format` keys (they belong
+            # to the chat realtime endpoint, not translations). PCM16 is the
+            # default I/O format for this endpoint; only the target language
+            # needs to be set explicitly.
             session_update = {
                 "type": "session.update",
                 "session": {
-                    "input_audio_format": "pcm16",
-                    "output_audio_format": "pcm16",
                     "audio": {
                         "output": {
                             "language": config.target_lang_iso,
@@ -302,8 +305,12 @@ class RealtimeSession:
                 if frame is None:
                     return
                 b64 = base64.b64encode(frame).decode("ascii")
+                # Translations endpoint namespaces client → server event
+                # types under `session.` — only `session.update`,
+                # `session.input_audio_buffer.append`, and `session.close`
+                # are accepted (rejected with "Invalid value" otherwise).
                 payload = json.dumps(
-                    {"type": "input_audio_buffer.append", "audio": b64}
+                    {"type": "session.input_audio_buffer.append", "audio": b64}
                 )
                 await self._ws.send(payload)
         except asyncio.CancelledError:

@@ -69,7 +69,15 @@ Task {
     // PCM is flowing.
     let capture: AudioCapture
     do {
-        capture = try AudioCapture(emit: { event in emit(event) }, frameSink: pcmSink)
+        // `onTerminalLoss` runs after `AudioCapture` has emitted
+        // `error{code: mic_lost, message: <reason>}` to stderr and torn
+        // everything down. Exit code 5 mirrors the orchestrator's
+        // `errors.py` mapping for `mic_lost` — see tech spec §2.3.
+        capture = try AudioCapture(
+            emit: { event in emit(event) },
+            frameSink: pcmSink,
+            onTerminalLoss: { exit(5) }
+        )
         try await capture.start()
     } catch {
         emit(.error(code: "mic_start_failed"))

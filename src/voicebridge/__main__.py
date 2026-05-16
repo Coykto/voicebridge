@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import contextlib
 import datetime as _dt
+import logging
 import os
 import signal
 import sys
@@ -21,13 +22,36 @@ from pathlib import Path
 from typing import TextIO
 
 from . import errors
-from .capture import spawn
+from .capture import pcm_frames, spawn
 from .config import load_config
+from .gating import MicGate
 from .hotkey import PTTState
 from .ipc import Error, Event, HotkeyDown, HotkeyRegistered, HotkeyUp, LogLine, Ready
+from .playback import Playback
 from .realtime import RealtimeSession
 
 STARTUP_TIMEOUT_SECONDS = 5.0
+
+# Realtime translations endpoint produces and expects 24 kHz mono PCM16
+# (per OpenAI's realtime guide). Swift emits 16 kHz; the gate sink upsamples
+# 16 → 24 kHz before send_frame so the server's auto-VAD reads the audio at
+# the correct pitch / cadence.
+MODEL_AUDIO_SAMPLE_RATE = 24000
+MIC_SAMPLE_RATE = 16000
+
+# Bucket for the per-PTT-session "capture started / capture stopped" lines.
+# A dedicated logger (not the root) keeps the format independent of any future
+# verbose / quiet flags applied elsewhere in the process. Func spec §2.3
+# requires both lines to be visible in the terminal — attach a stderr
+# StreamHandler with a message-only format so they look like the `down`/`up`
+# lines already emitted by `_event_loop` (no timestamp, no level prefix).
+_gate_logger = logging.getLogger("voicebridge.gate")
+_gate_logger.setLevel(logging.INFO)
+if not _gate_logger.handlers:
+    _gate_handler = logging.StreamHandler(sys.stderr)
+    _gate_handler.setFormatter(logging.Formatter("%(message)s"))
+    _gate_logger.addHandler(_gate_handler)
+    _gate_logger.propagate = False
 
 
 class _StartupError(Exception):
@@ -101,17 +125,34 @@ async def _await_startup(
         if isinstance(event, HotkeyRegistered):
             return event
         if isinstance(event, Error):
-            message, exit_code = errors.lookup(event.code)
+            message, exit_code = errors.lookup(event.code, message=event.message)
             raise _StartupError(message, exit_code)
         # Unexpected hotkey event before registration — keep waiting.
 
 
+class _RuntimeError(Exception):
+    """Carries a user-facing message + exit code for a mid-session Swift error."""
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.exit_code = exit_code
+
+
 async def _event_loop(
-    events: AsyncIterator[Event], capture_log: _CaptureLog, state: PTTState
+    events: AsyncIterator[Event],
+    capture_log: _CaptureLog,
+    state: PTTState,
+    session: RealtimeSession,
 ) -> None:
     async for event in events:
         if isinstance(event, HotkeyDown):
             state.on_down()
+            # Arm the realtime first-mic-frame / first-model-audio hooks for
+            # the new turn. The translations endpoint auto-detects turns via
+            # VAD, but `mark_turn_start` is also the signal that resets
+            # internal latency timers.
+            session.mark_turn_start()
             print("down", flush=True)
         elif isinstance(event, HotkeyUp):
             state.on_up()
@@ -119,8 +160,81 @@ async def _event_loop(
         elif isinstance(event, LogLine):
             capture_log.write(event.raw)
         elif isinstance(event, Error):
+            # `mic_lost` is terminal — same handler as startup-time mic errors,
+            # just arriving mid-session. Surface as an exception so the wait()
+            # below returns and the orchestrator tears down cleanly.
+            if event.code == "mic_lost":
+                message, exit_code = errors.lookup(event.code, message=event.message)
+                raise _RuntimeError(message, exit_code)
             print(f"capture error: {event.code}", file=sys.stderr, flush=True)
         # Ready / HotkeyRegistered after startup: ignore silently.
+
+
+def _upsample_16k_to_24k(pcm16le: bytes) -> bytes:
+    """Linear 16 kHz → 24 kHz upsample of mono PCM16.
+
+    The realtime translations endpoint expects 24 kHz PCM16 input. Swift
+    emits 16 kHz; rather than ship 16 kHz through and let the server
+    misread our cadence (chipmunk effect), interpolate 2 source samples
+    into 3 output samples (16 × 3 / 2 = 24). Linear interpolation is good
+    enough for speech; no quality bar to hit at the PoC stage.
+    """
+
+    import array
+
+    src = array.array("h")
+    src.frombytes(pcm16le)
+    n = len(src)
+    if n == 0:
+        return b""
+    # Output count: ceil(n * 3 / 2) — every pair of source samples becomes
+    # three output samples; an odd trailing sample becomes one trailing
+    # sample with no interpolated neighbor.
+    dst = array.array("h", [0] * ((n * 3 + 1) // 2))
+    j = 0
+    for i in range(0, n - 1, 2):
+        s0 = src[i]
+        s1 = src[i + 1]
+        # Positions 0/3, 1/3, 2/3 across the s0..s1 segment.
+        dst[j] = s0
+        dst[j + 1] = (2 * s0 + s1) // 3
+        dst[j + 2] = (s0 + 2 * s1) // 3
+        j += 3
+    # Odd trailing source sample, if any.
+    if n % 2 == 1:
+        dst[j] = src[-1]
+        j += 1
+    return dst[:j].tobytes()
+
+
+async def _pcm_pump(
+    stdout: asyncio.StreamReader,
+    state: PTTState,
+    session: RealtimeSession,
+) -> None:
+    """Drain the Swift binary's PCM stdout through the PTT gate into the model.
+
+    Returns cleanly on EOF (Swift exited). The caller treats that as the
+    signal to shut the orchestrator down — same effect as Ctrl+C.
+    """
+
+    async def sink(chunk: bytes) -> None:
+        await session.send_frame(_upsample_16k_to_24k(chunk))
+
+    gate = MicGate(state.ptt_active, _gate_logger)
+    try:
+        await gate.run(pcm_frames(stdout), sink)
+    except EOFError:
+        _gate_logger.info("Swift mic stream closed")
+
+
+async def _playback_pump(
+    session: RealtimeSession, playback: Playback
+) -> None:
+    """Drain translated-audio frames from the realtime session into Playback."""
+
+    async for frame in session.audio_frames():
+        playback.write(frame)
 
 
 async def _terminate(proc: asyncio.subprocess.Process) -> None:
@@ -181,6 +295,7 @@ async def run(args: argparse.Namespace, config) -> int:
             loop.add_signal_handler(sig, shutdown.set)
 
     session: RealtimeSession | None = None
+    playback: Playback | None = None
     try:
         try:
             await _await_startup(events, capture_log)
@@ -195,30 +310,58 @@ async def run(args: argparse.Namespace, config) -> int:
             return 1
 
         session = await RealtimeSession.open(config)
+        playback = Playback()
+        playback.open(MODEL_AUDIO_SAMPLE_RATE)
         print(
             f"Connected. Russian → {config.target_lang_name}. Ready.",
             flush=True,
         )
 
         state = PTTState()
-        event_task = asyncio.create_task(_event_loop(events, capture_log, state))
+        event_task = asyncio.create_task(
+            _event_loop(events, capture_log, state, session)
+        )
         shutdown_task = asyncio.create_task(shutdown.wait())
         session_task = asyncio.create_task(session.wait_closed())
+        assert proc.stdout is not None  # spawn() always uses PIPE
+        pcm_task = asyncio.create_task(_pcm_pump(proc.stdout, state, session))
+        playback_task = asyncio.create_task(_playback_pump(session, playback))
         try:
             await asyncio.wait(
-                {event_task, shutdown_task, session_task},
+                {event_task, shutdown_task, session_task, pcm_task, playback_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
             event_task.cancel()
             shutdown_task.cancel()
             session_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            pcm_task.cancel()
+            playback_task.cancel()
+            # Suppress every exception while draining cancellation — a task
+            # that already completed with an error (e.g. `_event_loop`
+            # raising `_RuntimeError` for mid-session `mic_lost`) would
+            # re-raise it here and shadow the dedicated exit-code path
+            # below. The actual exception is read off the task afterward.
+            with contextlib.suppress(BaseException):
                 await event_task
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(BaseException):
                 await shutdown_task
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(BaseException):
                 await session_task
+            with contextlib.suppress(BaseException):
+                await pcm_task
+
+        # `mic_lost` from the stderr event loop surfaces as `_RuntimeError`
+        # and outranks every other completion condition — print + exit
+        # with the dedicated code so the user sees the disconnection reason
+        # rather than a generic shutdown.
+        if event_task.done() and not event_task.cancelled():
+            event_exc = event_task.exception()
+            if isinstance(event_exc, _RuntimeError):
+                print(event_exc.message, file=sys.stderr, flush=True)
+                return event_exc.exit_code
+            if event_exc is not None:
+                raise event_exc
 
         if session_task.done() and not session_task.cancelled():
             session_exc = session_task.exception()
@@ -232,6 +375,9 @@ async def run(args: argparse.Namespace, config) -> int:
         if session is not None:
             with contextlib.suppress(Exception):
                 await session.close()
+        if playback is not None:
+            with contextlib.suppress(Exception):
+                playback.close()
         await _terminate(proc)
         capture_log.close()
 

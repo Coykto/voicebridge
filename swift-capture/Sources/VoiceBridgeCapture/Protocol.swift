@@ -17,13 +17,14 @@ enum Event: Equatable {
     case hotkeyRegistered(chord: String)
     case hotkeyDown(ts: String)
     case hotkeyUp(ts: String)
-    case error(code: String)
+    case error(code: String, message: String? = nil)
 
     private enum CodingKeys: String, CodingKey {
         case event
         case chord
         case ts
         case code
+        case message
     }
 
     private enum EventKind: String, Codable {
@@ -53,7 +54,8 @@ extension Event: Codable {
             self = .hotkeyUp(ts: ts)
         case .error:
             let code = try container.decode(String.self, forKey: .code)
-            self = .error(code: code)
+            let message = try container.decodeIfPresent(String.self, forKey: .message)
+            self = .error(code: code, message: message)
         }
     }
 
@@ -71,9 +73,12 @@ extension Event: Codable {
         case .hotkeyUp(let ts):
             try container.encode(EventKind.hotkeyUp, forKey: .event)
             try container.encode(ts, forKey: .ts)
-        case .error(let code):
+        case .error(let code, let message):
             try container.encode(EventKind.error, forKey: .event)
             try container.encode(code, forKey: .code)
+            if let message = message {
+                try container.encode(message, forKey: .message)
+            }
         }
     }
 }

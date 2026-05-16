@@ -42,9 +42,15 @@ class HotkeyUp:
 
 @dataclass(frozen=True)
 class Error:
-    """Swift-side startup error. ``code`` is a closed-set token."""
+    """Swift-side error event. ``code`` is a closed-set token.
+
+    ``message`` is an optional free-form one-line reason — currently only
+    ``mic_lost`` carries one (e.g. ``"default input removed"``). Absent on
+    startup-time errors where the code alone identifies the failure.
+    """
 
     code: str
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,7 +98,11 @@ def _decode(line: str) -> Event:
         case "error":
             code = obj.get("code")
             if isinstance(code, str):
-                return Error(code=code)
+                message = obj.get("message")
+                return Error(
+                    code=code,
+                    message=message if isinstance(message, str) else None,
+                )
             return LogLine(raw=stripped)
         case _:
             return LogLine(raw=stripped)
