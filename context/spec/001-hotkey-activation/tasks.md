@@ -46,14 +46,14 @@ Subagents available: `macos-swift` (Swift / Carbon / AVAudioEngine), `python-bac
 
 **Goal:** functional spec §2.4 and §2.5 satisfied. The orchestrator never silently hangs on a startup failure.
 
-- [ ] Create `src/voicebridge/errors.py` mapping the closed set of error codes from tech spec §2.4 to (human-readable message, exit code) tuples:
+- [x] Create `src/voicebridge/errors.py` mapping the closed set of error codes from tech spec §2.4 to (human-readable message, exit code) tuples:
   - `accessibility_denied` → §2.4 wording, exit 2
   - `conflict` → §2.5 wording, exit 1
   - everything else → "hotkey could not be registered: `<code>`", exit 1
   **[Agent: python-backend]**
-- [ ] Extend `__main__.py` startup: while waiting for `HotkeyRegistered`, also accept `Error`; on `Error`, look up via `errors.py`, print the message to stderr, terminate the Swift subprocess, exit with the mapped code. Add a timeout branch: if neither event arrives within 5 s, kill subprocess, print "Swift capture did not start in time", exit 3. **[Agent: python-backend]**
-- [ ] Add `tests/test_startup.py`: feed a fake event stream of (`ready` → `error{accessibility_denied}`), assert the process exits with code 2 and the right message; repeat for `conflict` (exit 1) and `param_err` (exit 1, generic message); and for timeout (exit 3). **[Agent: python-backend]**
-- [ ] **Verify automated:** `uv run pytest tests/` — all three test files pass. **[Agent: python-backend]**
+- [x] Extend `__main__.py` startup: while waiting for `HotkeyRegistered`, also accept `Error`; on `Error`, look up via `errors.py`, print the message to stderr, terminate the Swift subprocess, exit with the mapped code. Add a timeout branch: if neither event arrives within 5 s, kill subprocess, print "Swift capture did not start in time", exit 3. **[Agent: python-backend]**
+- [x] Add `tests/test_startup.py`: feed a fake event stream of (`ready` → `error{accessibility_denied}`), assert the process exits with code 2 and the right message; repeat for `conflict` (exit 1) and `param_err` (exit 1, generic message); and for timeout (exit 3). **[Agent: python-backend]**
+- [x] **Verify automated:** `uv run pytest tests/` — all three test files pass. **[Agent: python-backend]**
 - [ ] **Verify manual — AX denied:** Open System Settings → Privacy & Security → Accessibility → toggle the `voicebridge-capture` binary OFF (or its parent terminal). Run `uv run python -m voicebridge --source ru --target en` → see the Accessibility error message naming System Settings → process exits with code 2 (`echo $?`). Re-enable AX afterward. **[Agent: python-backend — requires user to toggle System Settings]**
 - [ ] **Verify manual — conflict:** Bind ⌥⌘T in another app (Hammerspoon one-liner: `hs.hotkey.bind({"alt","cmd"}, "T", function() end)`, or Keyboard Maestro). Run `uv run python -m voicebridge ...` → see the conflict error → exit code 1. Unbind afterward. **[Agent: python-backend — requires user to bind ⌥⌘T in another tool]**
 
