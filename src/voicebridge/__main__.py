@@ -1,8 +1,10 @@
 """CLI entry point: ``python -m voicebridge``.
 
-Boots the Swift capture binary, performs the startup handshake, then prints
-``down`` / ``up`` for each hotkey event until Ctrl+C. Free-form (non-JSON)
-stderr lines from Swift are appended to ``./logs/<ts>-capture.log``.
+Loads config, boots the Swift capture binary, performs the startup handshake,
+opens a realtime translation session against OpenAI, prints the single ready
+line, then prints ``down`` / ``up`` for each hotkey event until Ctrl+C or the
+realtime session terminates. Free-form (non-JSON) stderr lines from Swift are
+appended to ``./logs/<ts>-capture.log``.
 """
 
 from __future__ import annotations
@@ -20,8 +22,10 @@ from typing import TextIO
 
 from . import errors
 from .capture import spawn
+from .config import load_config
 from .hotkey import PTTState
 from .ipc import Error, Event, HotkeyDown, HotkeyRegistered, HotkeyUp, LogLine, Ready
+from .realtime import RealtimeSession
 
 STARTUP_TIMEOUT_SECONDS = 5.0
 
@@ -39,16 +43,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="voicebridge",
         description="Real-time voice translation PoC (Phase 1).",
-    )
-    parser.add_argument(
-        "--source",
-        default="ru",
-        help="Source language code (accepted but unused in Slice 2).",
-    )
-    parser.add_argument(
-        "--target",
-        default="en",
-        help="Target language code (accepted but unused in Slice 2).",
     )
     return parser.parse_args(argv)
 
@@ -174,7 +168,7 @@ def _hard_kill_sync(proc: asyncio.subprocess.Process) -> None:
 _proc_for_cleanup: asyncio.subprocess.Process | None = None
 
 
-async def run(args: argparse.Namespace) -> int:
+async def run(args: argparse.Namespace, config) -> int:
     global _proc_for_cleanup
     capture_log = _CaptureLog(_log_filename())
     proc, events = await spawn()
@@ -186,6 +180,7 @@ async def run(args: argparse.Namespace) -> int:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, shutdown.set)
 
+    session: RealtimeSession | None = None
     try:
         try:
             await _await_startup(events, capture_log)
@@ -199,31 +194,44 @@ async def run(args: argparse.Namespace) -> int:
             print(f"voicebridge: {exc}", file=sys.stderr, flush=True)
             return 1
 
+        session = await RealtimeSession.open(config)
         print(
-            "[ready] press ⌥⌘T to translate (Ctrl+C to quit)",
+            f"Connected. Russian → {config.target_lang_name}. Ready.",
             flush=True,
         )
 
         state = PTTState()
         event_task = asyncio.create_task(_event_loop(events, capture_log, state))
         shutdown_task = asyncio.create_task(shutdown.wait())
+        session_task = asyncio.create_task(session.wait_closed())
         try:
-            done, _pending = await asyncio.wait(
-                {event_task, shutdown_task},
+            await asyncio.wait(
+                {event_task, shutdown_task, session_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
             event_task.cancel()
             shutdown_task.cancel()
+            session_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await event_task
             with contextlib.suppress(asyncio.CancelledError):
                 await shutdown_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await session_task
+
+        if session_task.done() and not session_task.cancelled():
+            session_exc = session_task.exception()
+            if session_exc is not None:
+                raise session_exc
         return 0
     finally:
         for sig in (signal.SIGINT, signal.SIGTERM):
             with contextlib.suppress(NotImplementedError, ValueError):
                 loop.remove_signal_handler(sig)
+        if session is not None:
+            with contextlib.suppress(Exception):
+                await session.close()
         await _terminate(proc)
         capture_log.close()
 
@@ -231,9 +239,17 @@ async def run(args: argparse.Namespace) -> int:
 def main() -> None:
     args = _parse_args()
     try:
-        exit_code = asyncio.run(run(args))
+        config = load_config()
+    except errors.ConfigError as exc:
+        errors.handle(exc)
+    try:
+        exit_code = asyncio.run(run(args, config))
     except KeyboardInterrupt:
         exit_code = 0
+    except errors.RealtimeError as exc:
+        if _proc_for_cleanup is not None:
+            _hard_kill_sync(_proc_for_cleanup)
+        errors.handle(exc)
     finally:
         if _proc_for_cleanup is not None:
             _hard_kill_sync(_proc_for_cleanup)

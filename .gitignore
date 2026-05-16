@@ -3,3 +3,4 @@
 swift-capture/.build/
 __pycache__/
 *.pyc
+logs/

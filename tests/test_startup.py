@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from voicebridge import __main__ as vb_main
+from voicebridge.config import Config
 from voicebridge.ipc import Error, Event, HotkeyRegistered, Ready
 
 
@@ -66,7 +67,36 @@ def _install_fake_spawn(
 
 
 def _args() -> argparse.Namespace:
-    return argparse.Namespace(source="ru", target="en")
+    return argparse.Namespace()
+
+
+def _config() -> Config:
+    return Config(
+        api_key="sk-test-1234",
+        target_lang_name="English",
+        target_lang_iso="en",
+    )
+
+
+class _StubSession:
+    """Inert realtime session — open()/wait_closed() never resolve until cancelled."""
+
+    @classmethod
+    async def open(cls, config: Config) -> "_StubSession":
+        return cls()
+
+    async def wait_closed(self) -> None:
+        await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_realtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace RealtimeSession in __main__ so Swift-startup tests never touch the network."""
+
+    monkeypatch.setattr(vb_main, "RealtimeSession", _StubSession)
 
 
 async def test_accessibility_denied_exits_2(
@@ -74,7 +104,7 @@ async def test_accessibility_denied_exits_2(
 ) -> None:
     _install_fake_spawn(monkeypatch, [Ready(), Error(code="accessibility_denied")])
 
-    exit_code = await vb_main.run(_args())
+    exit_code = await vb_main.run(_args(), _config())
 
     assert exit_code == 2
     err = capsys.readouterr().err
@@ -87,7 +117,7 @@ async def test_conflict_exits_1(
 ) -> None:
     _install_fake_spawn(monkeypatch, [Ready(), Error(code="conflict")])
 
-    exit_code = await vb_main.run(_args())
+    exit_code = await vb_main.run(_args(), _config())
 
     assert exit_code == 1
     err = capsys.readouterr().err
@@ -99,7 +129,7 @@ async def test_param_err_exits_1_with_generic_message(
 ) -> None:
     _install_fake_spawn(monkeypatch, [Ready(), Error(code="param_err")])
 
-    exit_code = await vb_main.run(_args())
+    exit_code = await vb_main.run(_args(), _config())
 
     assert exit_code == 1
     err = capsys.readouterr().err
@@ -114,7 +144,7 @@ async def test_timeout_exits_3(
     # Keep the test fast — the production default is 5s.
     monkeypatch.setattr(vb_main, "STARTUP_TIMEOUT_SECONDS", 0.1)
 
-    exit_code = await vb_main.run(_args())
+    exit_code = await vb_main.run(_args(), _config())
 
     assert exit_code == 3
     err = capsys.readouterr().err
@@ -131,7 +161,7 @@ async def test_successful_startup_does_not_print_error(
         [Ready(), HotkeyRegistered(chord="option+command+t")],
     )
 
-    task = asyncio.create_task(vb_main.run(_args()))
+    task = asyncio.create_task(vb_main.run(_args(), _config()))
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
