@@ -114,15 +114,28 @@ class RealtimeSession:
         log_fp = _open_log()
         keep_log_open = False
         try:
-            # The realtime translations endpoint rejects top-level
-            # `input_audio_format` / `output_audio_format` keys (they belong
-            # to the chat realtime endpoint, not translations). PCM16 is the
-            # default I/O format for this endpoint; only the target language
-            # needs to be set explicitly.
+            # The realtime translations endpoint uses a continuous-in /
+            # continuous-out architecture — there is no `turn_detection`,
+            # `response.create`, or per-turn lifecycle (rejected with
+            # "Unknown parameter" if you try). The only knobs that affect
+            # latency / quality are:
+            #   - `audio.input.transcription.model`: lets the server lock
+            #     onto speech faster by running a parallel ASR pass.
+            #   - `audio.input.noise_reduction.type`: `near_field` for
+            #     close-talking mics (headsets, laptop mic at desk).
+            # See: https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide
             session_update = {
                 "type": "session.update",
                 "session": {
                     "audio": {
+                        "input": {
+                            "transcription": {
+                                "model": "gpt-realtime-whisper",
+                            },
+                            "noise_reduction": {
+                                "type": "near_field",
+                            },
+                        },
                         "output": {
                             "language": config.target_lang_iso,
                         },
