@@ -117,25 +117,14 @@ class RealtimeSession:
             # The realtime translations endpoint uses a continuous-in /
             # continuous-out architecture — there is no `turn_detection`,
             # `response.create`, or per-turn lifecycle (rejected with
-            # "Unknown parameter" if you try). The only knobs that affect
-            # latency / quality are:
-            #   - `audio.input.transcription.model`: lets the server lock
-            #     onto speech faster by running a parallel ASR pass.
-            #   - `audio.input.noise_reduction.type`: `near_field` for
-            #     close-talking mics (headsets, laptop mic at desk).
-            # See: https://developers.openai.com/cookbook/examples/voice_solutions/realtime_translation_guide
+            # "Unknown parameter" if you try). Keep session config minimal:
+            # the cookbook's `transcription` + `noise_reduction` extras add
+            # input-side processing latency without a measurable
+            # translation-quality benefit for clean close-mic PoC audio.
             session_update = {
                 "type": "session.update",
                 "session": {
                     "audio": {
-                        "input": {
-                            "transcription": {
-                                "model": "gpt-realtime-whisper",
-                            },
-                            "noise_reduction": {
-                                "type": "near_field",
-                            },
-                        },
                         "output": {
                             "language": config.target_lang_iso,
                         },

@@ -244,7 +244,11 @@ final class AudioCapture {
         // Passing `nil` as the tap format captures the bus's natural format
         // (typically float32 / native sample rate / native channel count),
         // which is the safest choice across input devices.
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
+        // bufferSize: 256 → ~5 ms of source audio per tap callback at the
+        // bus's native 48 kHz. Apple treats this as a hint, not a contract,
+        // and may deliver larger frames anyway. The original 1024 (~21 ms)
+        // added an unnecessary mic-to-Python lag for a real-time path.
+        input.installTap(onBus: 0, bufferSize: 256, format: nil) { [weak self] buffer, _ in
             self?.handleMicBuffer(buffer)
         }
         tapInstalled = true
@@ -538,7 +542,11 @@ final class AudioCapture {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
+        // bufferSize: 256 → ~5 ms of source audio per tap callback at the
+        // bus's native 48 kHz. Apple treats this as a hint, not a contract,
+        // and may deliver larger frames anyway. The original 1024 (~21 ms)
+        // added an unnecessary mic-to-Python lag for a real-time path.
+        input.installTap(onBus: 0, bufferSize: 256, format: nil) { [weak self] buffer, _ in
             self?.handleMicBuffer(buffer)
         }
         tapInstalled = true

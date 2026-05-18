@@ -78,7 +78,7 @@ async def test_send_frame_emits_input_audio_buffer_append(
 
         assert len(fake.sent) == baseline + 1
         payload = json.loads(fake.sent[-1])
-        assert payload["type"] == "input_audio_buffer.append"
+        assert payload["type"] == "session.input_audio_buffer.append"
         assert payload["audio"] == base64.b64encode(pcm).decode("ascii")
     finally:
         await session.close()

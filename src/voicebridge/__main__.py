@@ -68,7 +68,48 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="voicebridge",
         description="Real-time voice translation PoC (Phase 1).",
     )
+    parser.add_argument(
+        "--output-device",
+        default=None,
+        help=(
+            "Output device for translated audio. Pass a name substring (e.g. "
+            "'BlackHole 2ch') or a numeric index from --list-output-devices. "
+            "Default: system default output."
+        ),
+    )
+    parser.add_argument(
+        "--list-output-devices",
+        action="store_true",
+        help="Print available output devices and exit.",
+    )
     return parser.parse_args(argv)
+
+
+def _list_output_devices() -> None:
+    import sounddevice
+
+    hostapis = sounddevice.query_hostapis()
+    for idx, dev in enumerate(sounddevice.query_devices()):
+        if dev.get("max_output_channels", 0) > 0:
+            hostapi_idx = dev.get("hostapi", -1)
+            hostapi_name = (
+                hostapis[hostapi_idx]["name"]
+                if 0 <= hostapi_idx < len(hostapis)
+                else ""
+            )
+            print(f"[{idx}] {dev['name']}  ({hostapi_name})")
+
+
+def _resolve_output_device(value: str | None) -> str | int | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        return stripped
 
 
 def _log_filename() -> Path:
@@ -311,9 +352,13 @@ async def run(args: argparse.Namespace, config) -> int:
 
         session = await RealtimeSession.open(config)
         playback = Playback()
-        playback.open(MODEL_AUDIO_SAMPLE_RATE)
+        output_device = _resolve_output_device(getattr(args, "output_device", None))
+        playback.open(MODEL_AUDIO_SAMPLE_RATE, device=output_device)
+        device_label = (
+            f" [output: {output_device}]" if output_device is not None else ""
+        )
         print(
-            f"Connected. Russian → {config.target_lang_name}. Ready.",
+            f"Connected. Russian → {config.target_lang_name}.{device_label} Ready.",
             flush=True,
         )
 
@@ -384,6 +429,9 @@ async def run(args: argparse.Namespace, config) -> int:
 
 def main() -> None:
     args = _parse_args()
+    if args.list_output_devices:
+        _list_output_devices()
+        raise SystemExit(0)
     try:
         config = load_config()
     except errors.ConfigError as exc:
